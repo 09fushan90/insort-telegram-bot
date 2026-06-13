@@ -58,3 +58,20 @@ https://t.me/insort_order_bot?start=ORDER_ID
 ## Важливо
 
 Не додавай `serviceAccountKey.json` у GitHub. Це секретний файл.
+
+
+## ВАЖЛИВО: Firebase ключ безпечно
+
+Не завантажуй `serviceAccountKey.json` на GitHub.
+У Render додай змінну Environment:
+
+- KEY: `FIREBASE_SERVICE_ACCOUNT`
+- VALUE: весь текст із файлу `serviceAccountKey.json` повністю, від `{` до `}`
+
+Також потрібні змінні:
+
+- `BOT_TOKEN`
+- `ADMIN_CHAT_ID`
+- `FIREBASE_DATABASE_URL`
+
+Ця версія бота вже вміє читати Firebase ключ із Render Environment, тому файл `serviceAccountKey.json` більше не потрібен у репозиторії.

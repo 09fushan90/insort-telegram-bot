@@ -1,19 +1,38 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const admin = require('firebase-admin');
-const crypto = require('crypto');
+const http = require('http');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const FIREBASE_DATABASE_URL = process.env.FIREBASE_DATABASE_URL;
+const FIREBASE_SERVICE_ACCOUNT = process.env.FIREBASE_SERVICE_ACCOUNT;
+const FIREBASE_SERVICE_ACCOUNT_BASE64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
 const SERVICE_ACCOUNT_PATH = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || './serviceAccountKey.json';
 
 if (!BOT_TOKEN) throw new Error('BOT_TOKEN is missing in .env');
 if (!ADMIN_CHAT_ID) throw new Error('ADMIN_CHAT_ID is missing in .env');
 if (!FIREBASE_DATABASE_URL) throw new Error('FIREBASE_DATABASE_URL is missing in .env');
 
+function getServiceAccount() {
+  if (FIREBASE_SERVICE_ACCOUNT) {
+    return JSON.parse(FIREBASE_SERVICE_ACCOUNT);
+  }
+
+  if (FIREBASE_SERVICE_ACCOUNT_BASE64) {
+    const jsonText = Buffer.from(FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8');
+    return JSON.parse(jsonText);
+  }
+
+  try {
+    return require(SERVICE_ACCOUNT_PATH);
+  } catch (error) {
+    throw new Error('Firebase service account is missing. Add FIREBASE_SERVICE_ACCOUNT in Render Environment. Do not upload serviceAccountKey.json to GitHub.');
+  }
+}
+
 admin.initializeApp({
-  credential: admin.credential.cert(require(SERVICE_ACCOUNT_PATH)),
+  credential: admin.credential.cert(getServiceAccount()),
   databaseURL: FIREBASE_DATABASE_URL,
 });
 
@@ -370,6 +389,15 @@ bot.action(/^admin_sent_(\d{9})$/, async (ctx) => {
 bot.catch((err) => console.error('Bot error:', err));
 bot.launch();
 console.log('InSort order bot started');
+
+// Render Web Service needs an open port even if the Telegram bot works by polling.
+const PORT = process.env.PORT || 10000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('InSort Telegram bot is running');
+}).listen(PORT, () => {
+  console.log(`Health server listening on port ${PORT}`);
+});
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
