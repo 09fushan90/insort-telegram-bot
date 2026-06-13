@@ -77,6 +77,54 @@ function cartText(items) {
   }).join('\n');
 }
 
+
+function parseManualOrderText(text) {
+  const cleaned = String(text || '').trim();
+  if (!cleaned) return [];
+  const lines = cleaned.split(/\n+/).map(x => x.trim()).filter(Boolean);
+  const productLines = lines.filter(line => {
+    const low = line.toLowerCase();
+    if (low.startsWith('вітаю') || low.startsWith('разом') || low.startsWith('сума') || low.startsWith('товарів')) return false;
+    return /[а-яa-z0-9]/i.test(line);
+  });
+  const source = productLines.length ? productLines : [cleaned];
+  return source.slice(0, 30).map((line, index) => {
+    let name = line.replace(/^\d+[.)-]?\s*/, '').trim();
+    const qtyMatch = name.match(/[×xх*]\s*(\d+)|(?:—|-)\s*(\d+)\s*шт|\b(\d+)\s*шт/i);
+    const qty = qtyMatch ? Number(qtyMatch[1] || qtyMatch[2] || qtyMatch[3] || 1) : 1;
+    const priceMatches = [...name.matchAll(/(\d[\d\s]*(?:[.,]\d+)?)\s*(?:грн|₴)/gi)];
+    const price = priceMatches.length ? Number(priceMatches[priceMatches.length - 1][1].replace(/\s/g, '').replace(',', '.')) || 0 : 0;
+    name = name
+      .replace(/[×xх*]\s*\d+/gi, '')
+      .replace(/(?:—|-)\s*\d+\s*шт\.?/gi, '')
+      .replace(/\b\d+\s*шт\.?/gi, '')
+      .replace(/(?:—|-)\s*\d[\d\s]*(?:[.,]\d+)?\s*(?:грн|₴)/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    return { name: name || `Товар ${index + 1}`, qty: Math.max(1, qty || 1), price };
+  });
+}
+
+async function startCheckoutFromItems(ctx, items, tempOrderId = null) {
+  if (!items || !items.length) {
+    return ctx.reply('Не бачу товарів у повідомленні. Надішліть назву товару або список товарів одним повідомленням.');
+  }
+
+  userSessions.set(ctx.from.id, {
+    step: 'fullName',
+    tempOrderId,
+    telegramUserId: ctx.from.id,
+    telegramUsername: ctx.from.username || null,
+    items,
+    total: cartTotal(items),
+  });
+
+  await ctx.reply(
+    `✅ Товари прийнято. Починаю оформлення чеку.\n\n📦 Товари:\n${cartText(items)}\n\n💰 Разом: ${money(cartTotal(items))}`
+  );
+  return ctx.reply('Введіть ваше ім’я та прізвище:');
+}
+
 function getDeliveryName(value) {
   return {
     nova_poshta: 'Нова Пошта',
@@ -126,40 +174,48 @@ bot.start(async (ctx) => {
   const startPayload = (ctx.startPayload || '').trim();
 
   if (!startPayload) {
-    return ctx.reply('Вітаю! Щоб оформити замовлення, перейдіть у бота через кнопку “Замовити” на сайті InSort.');
+    return ctx.reply(
+      'Вітаю! Надішліть повідомлення з товаром, який ви замовили. Якщо ви перейшли з сайту, список товарів має бути вже скопійований — просто вставте його в поле повідомлення та надішліть.'
+    );
   }
 
   try {
     const tempOrder = await loadTempOrder(startPayload);
     if (!tempOrder) {
-      return ctx.reply('Не вдалося знайти ваше замовлення. Поверніться на сайт і натисніть “Замовити” ще раз.');
+      return ctx.reply(
+        'Вітаю! Надішліть повідомлення з товаром, який ви замовили. Якщо ви перейшли з сайту, список товарів має бути вже скопійований — просто вставте його в поле повідомлення та надішліть.'
+      );
     }
 
     const items = normalizeCart(tempOrder);
     if (!items.length) {
-      return ctx.reply('Кошик порожній. Поверніться на сайт і додайте товар у кошик.');
+      return ctx.reply('Кошик порожній. Поверніться на сайт і додайте товар у кошик або надішліть список товарів сюди повідомленням.');
     }
 
     userSessions.set(ctx.from.id, {
-      step: 'confirm_cart',
+      step: 'await_products_send',
       tempOrderId: startPayload,
       telegramUserId: ctx.from.id,
       telegramUsername: ctx.from.username || null,
-      items,
-      total: cartTotal(items),
+      preparedItems: items,
+      preparedTotal: cartTotal(items),
     });
 
     await ctx.reply(
-      `🛒 Ваше замовлення\n\n📦 Товари:\n${cartText(items)}\n\n💰 Разом: ${money(cartTotal(items))}\n\nПідтвердити замовлення?`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Підтвердити', 'confirm_cart')],
-        [Markup.button.callback('❌ Скасувати', 'cancel_order')],
-      ])
+      'Вітаю! Надішліть повідомлення з товаром, який ви замовили. Якщо ви перейшли з сайту, список товарів має бути вже скопійований — просто вставте його в поле повідомлення та надішліть.'
     );
   } catch (error) {
     console.error(error);
-    await ctx.reply('Сталася помилка при відкритті замовлення. Спробуйте ще раз.');
+    await ctx.reply('Сталася помилка при відкритті замовлення. Надішліть список товарів сюди одним повідомленням.');
   }
+});
+
+bot.action('use_prepared_items', async (ctx) => {
+  const session = userSessions.get(ctx.from.id);
+  if (!session?.preparedItems?.length) return ctx.answerCbQuery('Список товарів не знайдено');
+  await ctx.answerCbQuery();
+  await ctx.editMessageReplyMarkup(undefined).catch(() => {});
+  return startCheckoutFromItems(ctx, session.preparedItems, session.tempOrderId || null);
 });
 
 bot.action('confirm_cart', async (ctx) => {
@@ -180,9 +236,18 @@ bot.action('cancel_order', async (ctx) => {
 
 bot.on('text', async (ctx) => {
   const session = userSessions.get(ctx.from.id);
-  if (!session) return;
-
   const text = ctx.message.text.trim();
+
+  if (!session) {
+    const items = parseManualOrderText(text);
+    return startCheckoutFromItems(ctx, items, null);
+  }
+
+  if (session.step === 'await_products_send') {
+    const items = parseManualOrderText(text);
+    const finalItems = items.length ? items : (session.preparedItems || []);
+    return startCheckoutFromItems(ctx, finalItems, session.tempOrderId || null);
+  }
 
   if (session.step === 'fullName') {
     session.fullName = text;
